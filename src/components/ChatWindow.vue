@@ -51,6 +51,7 @@
 import { ref } from 'vue'
 import { OpenAI } from 'openai'
 import {useStore} from '@/stores/store'
+import neo4j from 'neo4j-driver'
 
 const store = useStore()
 
@@ -65,62 +66,129 @@ const openai = new OpenAI({
   dangerouslyAllowBrowser: true
 })
 
-async function sendRequest(){
+//Create Neo4j Connection
+const neo4jDriver = neo4j.driver(
+  import.meta.env.VITE_NEO4J_URI,
+  neo4j.auth.basic(
+    import.meta.env.VITE_NEO4J_USER,
+    import.meta.env.VITE_NEO4J_PASSWORD
+  )
+)
+
+//Function to execute Neo4j Cypher queries
+async function executeNeo4jQuery(cypherQuery, parameters = {}) {
+  const session = neo4jDriver.session()
+  try {
+    const result = await session.run(cypherQuery, parameters)
+    return result.records.map(record => record.toObject())
+  } catch (error) {
+    console.error('Neo4j query error:', error)
+    throw error
+  } finally {
+    await session.close()
+  }
+}
+
+async function sendRequest() {
   //Step 1: Show that the request is being sent
-  sendLoading = true
-  
-  //Step 2: Add user's message to the chat
+  sendLoading = true;
+
+  //Step 2: Add User's message to the chat log
   allMessages.value.push({
     message: inputMessage.value,
     type: 'userMessage'
   })
 
-  //Step 3: Get the graph data and simplify
+  //Step 3: Set up prompt
+  const conversation = [
+    {
+      role: "system",
+      content: `
+        You are an AI that answers questions about a Neo4j graph database.
 
-  //Step 4: Send the request to Open AI (https://platform.openai.com/docs/api-reference/chat/create)
+        The database structure is:
+        - Node label: Nodes
+        - Node properties: id, name, description, label, objectType, centroid, category
+        - centroid is defined as an array [x, y, z]
+        - Relationships: Edges (undirected adjacency between spaces)
 
-  //Step 5: Handle response
+        When you need data, request it by replying ONLY in this form:
 
-  //Step 6: Add response to allMessages
+        QUERY:
+        <cypher query>
 
-  //Step 7: Reset the input and stop Loading
-  inputMessage.value = ''
-  sendLoading = false
+        Rules for queries:
+        - Do NOT use backticks or code fences.
+        - Return only the Cypher query after "QUERY:" with no explanation.
+
+        When you have enough data, respond normally (do not use QUERY:).
+        If a previous query returned an error, correct the query and try again.
+        `
+    },
+    { role: "user", content: inputMessage.value }
+  ];
+
+  try {
+    //Iterative create and execute cypher queries.
+    let maxIterations = 8
+    for (let step = 0; step < maxIterations; step++) {  
+      let response;
+      
+      try {
+        response = await openai.chat.completions.create({
+          model: "gpt-4.1",  
+          messages: conversation,
+        });
+      } catch (err) {
+        console.error("OpenAI request failed:", err);
+        throw err;
+      }
+
+      console.log('OpenAI Response', response)
+      const reply = response.choices[0].message.content.trim();
+
+      if (reply.startsWith("QUERY:")) {
+        const cypherQuery = reply.replace("QUERY:", "").trim();
+
+        try {
+          const result = await executeNeo4jQuery(cypherQuery);
+
+          // Add result to conversation
+          conversation.push(
+            { role: "assistant", content: reply },
+            { role: "user", content: `RESULT:\n${JSON.stringify(result, null, 2)}` }
+          );
+
+        } catch (cypherError) {
+          console.warn("Cypher Error:", cypherError);
+
+          // Add any errors to the conversation and start another iteration
+          conversation.push(
+            { role: "assistant", content: reply },
+            { role: "user", content: `ERROR:\n${cypherError.message}\nPlease fix the query and try again.` }
+          );
+
+          continue; // Try another iteration
+        }
+
+        continue; // Continue the loop to allow further queries
+      }
+
+      // Push final answer to chat log 
+      allMessages.value.push({ message: reply, type: "openAIResponse" });
+      break;
+    }
+  } catch (fatalError) {
+    allMessages.value.push({
+      message: `Error: ${fatalError.message}`,
+      type: "openAIResponse"
+    });
+  }
+
+  inputMessage.value = "";
+  sendLoading = false;
 }
 
-function compressGraphData(original) {
-  const nodeIdMap = new Map();
-  const compressedNodes = [];
-  const compressedLinks = [];
-
-  original.nodes.forEach((node, index) => {
-    const shortId = `n${index}`;
-    nodeIdMap.set(node.id, shortId);
-
-    compressedNodes.push({
-      id: shortId,
-      name: node.Name,
-      type: node.IfcType,
-      category: node.category,
-      description: node.Description
-    });
-  });
-
-  original.links.forEach((link, index) => {
-    const sourceId = nodeIdMap.get(link.source.id || link.source);
-    const targetId = nodeIdMap.get(link.target.id || link.target);
-
-    compressedLinks.push({
-      source: sourceId,
-      target: targetId,
-    });
-  });
-
-  return {
-    nodes: compressedNodes,
-    links: compressedLinks
-  };
-}
 </script>
 
 <style scoped>
