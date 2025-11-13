@@ -8,13 +8,8 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
-    AppFooter: typeof import('./src/components/AppFooter.vue')['default']
     ChatWindow: typeof import('./src/components/ChatWindow.vue')['default']
-    ChatWindow_Completed: typeof import('./src/components/ChatWindow_Completed.vue')['default']
-    copy: typeof import('./src/components/NavBar copy.vue')['default']
     GraphViewer: typeof import('./src/components/GraphViewer.vue')['default']
-    HelloWorld: typeof import('./src/components/HelloWorld.vue')['default']
-    NavBar: typeof import('./src/components/NavBar.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
   }
